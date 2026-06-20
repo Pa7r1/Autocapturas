@@ -137,6 +137,7 @@ async function capturar(req, url, res) {
   const all = url.searchParams.has("all") || body.all === true;
   const filtro = body.slug || url.searchParams.get("project");
   const roles = Array.isArray(body.roles) ? body.roles : [];
+  const crawl = body.crawl === true;
 
   const proyectos = all
     ? cfg.projects
@@ -150,7 +151,7 @@ async function capturar(req, url, res) {
   const resultados = [];
   for (const p of proyectos) {
     console.log(`\n▶ ${p.name}`);
-    const r = await capturarProyecto(p, cfg, { roles });
+    const r = await capturarProyecto(p, cfg, { roles, crawl });
     console.log(`  Guardado en: ${r.dir}`);
     resultados.push({
       name: r.name,
@@ -227,6 +228,10 @@ function limpiarProyecto(p) {
   };
   if (p.login && typeof p.login === "object" && p.login.url) {
     const l = { url: String(p.login.url).trim() };
+    // Credenciales guardadas (opcionales): se persisten en config.json (local,
+    // gitignored) para capturar sin tipearlas cada vez. clave NO se recorta.
+    if (p.login.usuario && String(p.login.usuario).trim()) l.usuario = String(p.login.usuario).trim();
+    if (typeof p.login.clave === "string" && p.login.clave) l.clave = p.login.clave;
     for (const k of ["userSel", "passSel", "submitSel", "exitoUrl"]) {
       if (p.login[k] && String(p.login[k]).trim()) l[k] = String(p.login[k]).trim();
     }
@@ -648,26 +653,32 @@ function panel(cfg) {
       const s = slug(p.name);
       const nrutas = (p.routes || []).length;
       const tieneLogin = !!p.login;
-      return `<article class="proy" data-slug="${esc(s)}" data-login="${tieneLogin ? "1" : "0"}">
+      const tieneCred = !!(p.login && p.login.usuario && p.login.clave);
+      const estado = tieneLogin
+        ? (tieneCred ? " · con login ✓" : " · login sin credenciales")
+        : "";
+      return `<article class="proy" data-slug="${esc(s)}" data-login="${tieneLogin ? "1" : "0"}" data-cred="${tieneCred ? "1" : "0"}">
         <div class="cab">
           <div class="info">
             <h3>${esc(p.name)}</h3>
-            <p class="meta mono">${esc(p.baseUrl)} · ${nrutas} ruta${nrutas === 1 ? "" : "s"}${tieneLogin ? " · con login" : ""}</p>
+            <p class="meta mono">${esc(p.baseUrl)} · ${nrutas} ruta${nrutas === 1 ? "" : "s"}${estado}</p>
           </div>
           <div class="acciones-proy">
             <button class="descubrir" type="button">🔎 Descubrir rutas</button>
-            <button class="toggle">Capturar</button>
+            <button class="capturarYa primario" type="button">Capturar</button>
+            <button class="toggle" type="button" aria-expanded="false">opciones ▾</button>
           </div>
         </div>
         <form class="creds" hidden>
           ${tieneLogin
             ? `<label class="publico"><input type="checkbox" class="esPublico"> Capturar sin login (público)</label>
-          <p class="ayuda">Agregá un juego de credenciales por cada rol que quieras capturar (ej. común y administrador).</p>
+          <p class="ayuda">Por defecto usa las credenciales guardadas. Acá podés capturar como público o con otras credenciales (uno o más roles).</p>
           <div class="roles"></div>
           <button type="button" class="addRol">＋ agregar rol</button>`
-            : `<p class="ayuda">Este proyecto no tiene login configurado: se captura como público.</p>`}
+            : `<p class="ayuda">Este proyecto no tiene login: se captura como público.</p>`}
+          <label class="crawlOpt"><input type="checkbox" class="crawlSitio" checked> Recorrer y capturar todo el sitio (descubre las rutas solo)</label>
           <div class="lanzarBarra">
-            <button type="submit" class="lanzar primario">Capturar ahora</button>
+            <button type="submit" class="lanzar primario">Capturar con estas opciones</button>
           </div>
         </form>
         <div class="resultado" hidden></div>
@@ -689,18 +700,26 @@ function panel(cfg) {
 <body>
 <header>
   <h1>auto<span class="punto">·</span>capturas</h1>
-  <button id="abrirEditor">⚙ Configurar</button>
-  <a href="/gallery.html" target="_blank">Abrir galería →</a>
+  <div class="headAcciones">
+    <button id="abrirEditor" type="button">⚙ Configurar</button>
+    <a class="btnLink" href="/gallery.html" target="_blank" rel="noopener">Abrir galería →</a>
+  </div>
 </header>
 <main>
-  <section id="editor" class="editor" hidden></section>
-  <p class="intro">Elegí un proyecto y dispará la captura. Asegurate de tener el proyecto levantado en la URL configurada. Las imágenes se guardan en <span class="mono">${esc(OUT_DIR)}</span>. Para crear o editar proyectos y ajustes, usá <b>⚙ Configurar</b>.</p>
+  <ol class="pasos" aria-label="Cómo usar la herramienta">
+    <li><span class="num">1</span><span>Configurá tus proyectos con <b>⚙ Configurar</b>.</span></li>
+    <li><span class="num">2</span><span>Levantá el proyecto en su URL y tocá <b>Capturar</b>.</span></li>
+    <li><span class="num">3</span><span>Elegí las mejores en la <a href="/gallery.html" target="_blank" rel="noopener">galería</a>.</span></li>
+  </ol>
+  <p class="intro">Las capturas se guardan en <span class="mono">${esc(OUT_DIR)}</span>.</p>
   <div class="barra">
-    <button id="todos">Capturar todos (público)</button>
+    <button id="todos" type="button">Capturar todos (público)</button>
     <button id="borrarTodo" class="peligro" type="button">🗑 Borrar todas las capturas</button>
   </div>
   ${tarjetas}
 </main>
+
+<dialog id="editor" class="editor" aria-label="Configuración de proyectos y ajustes"></dialog>
 
 <script id="cfgDatos" type="application/json">${cfgEditable}</script>
 
