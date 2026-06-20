@@ -1,0 +1,13 @@
+{
+  "name": "autocapturas",
+  "version": "1.0.0",
+  "description": "Captura screenshots de proyectos web y arma una galería local para elegir cuáles van al portfolio.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/servidor.js",
+    "capture": "node src/motor.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
