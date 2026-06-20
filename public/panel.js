@@ -11,7 +11,7 @@
       '<input class="etiqueta" placeholder="rol (ej. común)" value="' + esc(etiqueta || "") + '">'
       + '<input class="usuario" placeholder="usuario / email" autocomplete="off">'
       + '<input class="clave" type="password" placeholder="contraseña" autocomplete="off">'
-      + '<button type="button" class="quitarRol" title="quitar">✕</button>';
+      + '<button type="button" class="quitarRol" title="quitar" aria-label="Quitar rol">✕</button>';
     div.querySelector(".quitarRol").addEventListener("click", function () {
       var cont = div.parentNode;
       div.remove();
@@ -41,6 +41,22 @@
 
     toggle.addEventListener("click", function () {
       form.hidden = !form.hidden;
+      toggle.setAttribute("aria-expanded", String(!form.hidden));
+      toggle.textContent = form.hidden ? "opciones ▾" : "opciones ▴";
+    });
+
+    // Captura de 1 clic: usa las credenciales guardadas y recorre todo el sitio.
+    var capturarYa = proy.querySelector(".capturarYa");
+    if (capturarYa) capturarYa.addEventListener("click", function () {
+      var conLogin = proy.dataset.login === "1";
+      var conCred = proy.dataset.cred === "1";
+      if (conLogin && !conCred) {
+        var caja = proy.querySelector(".resultado");
+        caja.hidden = false;
+        caja.innerHTML = '<span class="err">Faltan credenciales. Cargalas en ⚙ Configurar (una sola vez) y volvé a capturar.</span>';
+        return;
+      }
+      lanzar(proy, { slug: proy.dataset.slug, crawl: true });
     });
 
     var addRol = form.querySelector(".addRol");
@@ -55,7 +71,12 @@
 
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      lanzar(proy, { slug: proy.dataset.slug, roles: rolesDe(form) });
+      var chkCrawl = form.querySelector(".crawlSitio");
+      lanzar(proy, {
+        slug: proy.dataset.slug,
+        roles: rolesDe(form),
+        crawl: !!(chkCrawl && chkCrawl.checked),
+      });
     });
 
     var btnDesc = proy.querySelector(".descubrir");
@@ -131,7 +152,7 @@
     boton.disabled = true;
     boton.textContent = "Capturando…";
     caja.hidden = false;
-    caja.innerHTML = "Trabajando… (puede tardar según las rutas y los roles)";
+    caja.innerHTML = '<span class="cargando"><span class="spinner" aria-hidden="true"></span>Capturando… puede tardar según las rutas y los roles.</span>';
     fetch("/capturar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -284,8 +305,11 @@
 
   abrir.addEventListener("click", function () {
     if (!construido) { construir(); construido = true; }
-    editor.hidden = !editor.hidden;
-    if (!editor.hidden) editor.scrollIntoView({ behavior: "smooth", block: "start" });
+    editor.showModal();
+  });
+  // Cerrar al hacer click en el fondo (backdrop) del diálogo.
+  editor.addEventListener("click", function (ev) {
+    if (ev.target === editor) editor.close();
   });
 
   // Helpers de creación de nodos.
@@ -314,7 +338,8 @@
     editor.innerHTML = "";
     var cab = el("div", "editorCab", "<h2>Configuración</h2>");
     var cerrar = el("button", "cerrarEditor", "cerrar");
-    cerrar.addEventListener("click", function () { editor.hidden = true; });
+    cerrar.setAttribute("aria-label", "Cerrar configuración");
+    cerrar.addEventListener("click", function () { editor.close(); });
     cab.appendChild(cerrar);
     editor.appendChild(cab);
 
@@ -402,6 +427,10 @@
     if (!p.login) campos.hidden = true;
     var lg = p.login || {};
     campos.appendChild(etiqueta("URL del formulario de login", input("lUrl", lg.url || "/login", "/login")));
+    campos.appendChild(etiqueta("Usuario / email", input("lUsuario", lg.usuario || "", "tu@email.com")));
+    var inpClave = input("lClave", lg.clave || "", "contraseña", "password");
+    campos.appendChild(etiqueta("Contraseña", inpClave));
+    campos.appendChild(el("p", "credAviso", "Se guardan en config.json, en tu equipo (no se sube al repo). Con esto, capturás de un clic."));
     var det = el("details");
     det.appendChild(el("summary", null, "Selectores (avanzado · opcional, se autodetectan si los dejás vacíos)"));
     det.appendChild(etiqueta("Campo usuario (userSel)", input("lUser", lg.userSel || "", 'input[name="email"]')));
@@ -456,6 +485,10 @@
       var login = null;
       if (card.querySelector(".pTieneLogin").checked) {
         login = { url: card.querySelector(".lUrl").value.trim() };
+        var usuario = card.querySelector(".lUsuario").value.trim();
+        var clave = card.querySelector(".lClave").value;
+        if (usuario) login.usuario = usuario;
+        if (clave) login.clave = clave;
         var map = { lUser: "userSel", lPass: "passSel", lSubmit: "submitSel", lExito: "exitoUrl" };
         Object.keys(map).forEach(function (c) {
           var v = card.querySelector("." + c).value.trim();
