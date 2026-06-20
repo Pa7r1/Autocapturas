@@ -59,6 +59,16 @@ export async function descubrirRutas(page, baseUrl, opciones = {}) {
     if (!cola.some((c) => c.path === p)) cola.push({ path: p, depth: 0 });
   }
 
+  // Sembrar con rutas extra (ej. las ya configuradas en el proyecto).
+  for (const s of opciones.seeds || []) {
+    try {
+      const p = normalizarPath(new URL(s, origin));
+      if (!cola.some((c) => c.path === p)) cola.push({ path: p, depth: 0 });
+    } catch {
+      /* seed inválida */
+    }
+  }
+
   while (cola.length && visitados.size < maxPaginas) {
     const { path, depth } = cola.shift();
     if (visitados.has(path)) continue;
@@ -68,7 +78,12 @@ export async function descubrirRutas(page, baseUrl, opciones = {}) {
     let titulo = "";
     let enlaces = [];
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      const resp = await page.goto(url, { waitUntil: "load", timeout: 20000 });
+      if (resp && resp.status() >= 400) continue; // no sumamos páginas de error (404, etc.)
+      // En SPAs (React/Vue) los <a href> aparecen recién cuando el cliente
+      // pinta: esperamos a que haya enlaces y dejamos asentar antes de leerlos.
+      await page.waitForSelector("a[href]", { timeout: 4000 }).catch(() => {});
+      await page.waitForTimeout(500);
       titulo = (await page.title()) || "";
       enlaces = await page.evaluate(() =>
         Array.from(document.querySelectorAll("a[href]")).map((a) => a.href)
