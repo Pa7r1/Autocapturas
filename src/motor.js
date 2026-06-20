@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import config from "../config.js";
-import { detectarSecciones } from "./crawler.js";
+import { detectarSecciones, descubrirRutas } from "./crawler.js";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -52,33 +52,78 @@ export async function iniciarSesion(page, loginCfg, cred, baseUrl) {
   const loginUrl = new URL(loginCfg.url || "/", baseUrl).href;
   await page.goto(loginUrl, { waitUntil: "load", timeout: 30000 });
 
-  // Campo de usuario/email: selector configurado o auto-detección.
-  const userSel =
-    loginCfg.userSel ||
-    'input[type="email"], input[name*="user" i], input[name*="email" i], input[id*="user" i], input[id*="email" i]';
-  const passSel = loginCfg.passSel || 'input[type="password"]';
+  // Campos: primero el selector configurado (si hay), después la auto-detección.
+  const userDefault =
+    'input[type="email"], input[name*="user" i], input[name*="email" i], input[id*="user" i], input[id*="email" i], input[type="text"]';
+  const passDefault = 'input[type="password"]';
 
-  await page.locator(userSel).first().fill(cred.usuario, { timeout: 10000 });
-  const campoPass = page.locator(passSel).first();
-  await campoPass.fill(cred.clave, { timeout: 10000 });
+  if (!(await rellenarCampo(page, [loginCfg.userSel, userDefault], cred.usuario)))
+    throw new Error("No encontré el campo de usuario/email en el formulario.");
+  if (!(await rellenarCampo(page, [loginCfg.passSel, passDefault], cred.clave)))
+    throw new Error("No encontré el campo de contraseña en el formulario.");
 
-  // Enviar: botón configurado, auto-detección, o como fallback Enter.
-  const submitSel =
-    loginCfg.submitSel ||
-    'button[type="submit"], input[type="submit"], button:has-text("Ingresar"), button:has-text("Entrar"), button:has-text("Iniciar")';
-  const boton = page.locator(submitSel).first();
-  if (await boton.count()) {
-    await boton.click({ timeout: 10000 });
-  } else {
-    await campoPass.press("Enter");
+  // Enviar: botón configurado, auto-detección, o Enter en la contraseña.
+  const submitDefault =
+    'button[type="submit"], input[type="submit"], button:has-text("Ingresar"), button:has-text("Entrar"), button:has-text("Iniciar"), button:has-text("Log in"), button:has-text("Sign in")';
+  const urlAntes = page.url();
+  if (!(await clickPrimero(page, [loginCfg.submitSel, submitDefault]))) {
+    await page.locator(passDefault).first().press("Enter").catch(() => {});
   }
 
-  // Esperar señal de éxito: la URL indicada o, si no hay, que termine de cargar.
+  // Esperar a que el login termine. Si hay exitoUrl, la usamos. Si no, esperamos
+  // a que la URL cambie (redirección al dashboard): cubre logins asíncronos de
+  // SPAs (NextAuth/Auth.js, etc.) que no disparan un 'load' nuevo. NO usamos solo
+  // 'load' porque en una SPA resuelve al instante y seguiríamos sin loguear.
   if (loginCfg.exitoUrl) {
-    await page.waitForURL(loginCfg.exitoUrl, { timeout: 15000 });
+    await page.waitForURL(loginCfg.exitoUrl, { timeout: 15000 }).catch(() => {});
   } else {
-    await page.waitForLoadState("load", { timeout: 15000 }).catch(() => {});
+    await page.waitForURL((u) => u.href !== urlAntes, { timeout: 12000 }).catch(() => {});
   }
+  await page.waitForTimeout(1000); // settle: que se asiente la sesión/redirección
+
+  // Si no redirigió Y seguimos viendo el formulario (campo de contraseña), lo más
+  // probable es credenciales incorrectas: lo marcamos para que se vea en consola.
+  if (!loginCfg.exitoUrl && page.url() === urlAntes) {
+    const sigueEnForm = await page.locator(passDefault).first().count().catch(() => 0);
+    if (sigueEnForm) {
+      throw new Error("el login no avanzó: ¿credenciales incorrectas? (o configurá 'URL de éxito')");
+    }
+  }
+}
+
+// Prueba selectores en orden y rellena el primero que exista. Tolera selectores
+// inválidos (los saltea) para que una mala config no rompa todo el login.
+async function rellenarCampo(page, selectores, valor) {
+  for (const sel of selectores) {
+    if (!sel) continue;
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.count()) {
+        await loc.fill(valor, { timeout: 10000 });
+        return true;
+      }
+    } catch {
+      /* selector inválido o no rellenable: probamos el siguiente */
+    }
+  }
+  return false;
+}
+
+// Igual que rellenarCampo pero hace click en el primer selector que exista.
+async function clickPrimero(page, selectores) {
+  for (const sel of selectores) {
+    if (!sel) continue;
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.count()) {
+        await loc.click({ timeout: 10000 });
+        return true;
+      }
+    } catch {
+      /* probamos el siguiente */
+    }
+  }
+  return false;
 }
 
 // Deja la página lista para una captura fiel de páginas largas: espera fuentes,
@@ -137,6 +182,21 @@ async function prepararPagina(page, cfg) {
         dormir(3000),
       ]);
 
+      // Desanclar elementos fijos/pegajosos: en una captura fullPage los
+      // position:fixed quedan "flotando" en el medio y tapan el contenido. Los
+      // pasamos a absolute; haciendo `body` posicionado, un header (top:0) queda
+      // arriba y una barra (bottom:0) al fondo REAL del documento, no a una
+      // pantalla de altura. Los sticky pasan a static (quedan en su lugar).
+      let huboFijos = false;
+      document.querySelectorAll("body *").forEach((el) => {
+        const pos = getComputedStyle(el).position;
+        if (pos === "fixed") { el.style.setProperty("position", "absolute", "important"); huboFijos = true; }
+        else if (pos === "sticky") el.style.setProperty("position", "static", "important");
+      });
+      if (huboFijos && getComputedStyle(document.body).position === "static") {
+        document.body.style.setProperty("position", "relative", "important");
+      }
+
       // Volver al tope y sacar el estilo temporal.
       window.scrollTo(0, 0);
       estilo.remove();
@@ -147,17 +207,59 @@ async function prepararPagina(page, cfg) {
   await page.waitForTimeout(cfg.settleMs);
 }
 
+// Une dos listas de rutas sin duplicar por path (configuradas primero).
+function unirRutas(configuradas, descubiertas) {
+  const vistas = new Set();
+  const out = [];
+  for (const r of [...(configuradas || []), ...(descubiertas || [])]) {
+    if (!r || vistas.has(r.path)) continue;
+    vistas.add(r.path);
+    out.push(r);
+  }
+  return out;
+}
+
+// Abre un contexto, loguea (si corresponde) y descubre las rutas del sitio
+// navegando desde la página de aterrizaje. Devuelve [{ path, label }]; vacío si
+// algo falla. Siembra el crawl con las rutas ya configuradas en el proyecto.
+async function descubrirParaRol(browser, project, rol, hayLogin) {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  let rutas = [];
+  try {
+    let base = project.baseUrl;
+    if (hayLogin) {
+      await iniciarSesion(page, project.login, rol, project.baseUrl);
+      base = page.url() || base; // arrancar el crawl desde donde quedó tras loguear
+    } else {
+      await page.goto(project.baseUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+      base = page.url() || base;
+    }
+    const seeds = (project.routes || []).map((r) => r.path);
+    rutas = await descubrirRutas(page, base, { seeds });
+  } catch (e) {
+    console.warn(`  ⚠ No pude descubrir rutas (${rol.etiqueta || "publico"}): ${e.message}`);
+  }
+  await ctx.close();
+  return rutas;
+}
+
 // Captura un proyecto en todos los viewports, una pasada por rol (credenciales).
 // Sin roles, una sola pasada pública. opciones.roles = [{ etiqueta, usuario, clave }].
 export async function capturarProyecto(project, cfg = config, opciones = {}) {
   const projSlug = slug(project.name);
   const projDir = path.join(dirSalida(cfg), projSlug);
 
-  // Roles a capturar. Prioridad: los pasados por la UI > los del config >
-  // una única pasada pública sin login.
+  // Roles a capturar. Prioridad: los pasados por la UI (override) > multi-rol del
+  // config > credenciales guardadas en el login del proyecto > pasada pública.
+  const credGuardadas =
+    project.login && project.login.usuario && project.login.clave
+      ? [{ etiqueta: "principal", usuario: project.login.usuario, clave: project.login.clave }]
+      : null;
   const roles =
     (Array.isArray(opciones.roles) && opciones.roles.length && opciones.roles) ||
     (Array.isArray(project.roles) && project.roles.length && project.roles) ||
+    credGuardadas ||
     [{ etiqueta: "publico", usuario: null, clave: null }];
 
   const browser = await chromium.launch();
@@ -187,6 +289,8 @@ export async function capturarProyecto(project, cfg = config, opciones = {}) {
 
   // ¿Capturar también cada sección detectada en cada página?
   const capturarSecciones = !!(opciones.secciones || project.secciones);
+  // ¿Recorrer el sitio (ya logueado) y capturar todas las rutas que aparezcan?
+  const crawl = !!(opciones.crawl || project.crawl);
 
   try {
     for (const rol of roles) {
@@ -197,6 +301,16 @@ export async function capturarProyecto(project, cfg = config, opciones = {}) {
 
       // Hay login si el proyecto lo tiene configurado y el rol trae credenciales.
       const hayLogin = project.login && rol.usuario && rol.clave;
+
+      // Rutas a capturar para este rol. Con crawl, se descubren navegando el
+      // sitio ya logueado (así se ven las páginas detrás del login). Sin crawl,
+      // se usan las rutas configuradas en el proyecto.
+      let rutas = project.routes;
+      if (crawl) {
+        const descubiertas = await descubrirParaRol(browser, project, rol, hayLogin);
+        rutas = unirRutas(project.routes, descubiertas); // configuradas + descubiertas, sin duplicar
+        console.log(`  ↳ ${descubiertas.length} descubiertas, ${rutas.length} a capturar (${rolEtiqueta})`);
+      }
 
       // Un contexto (sesión) por viewport. Así el login se reutiliza entre rutas.
       for (const viewport of cfg.viewports) {
@@ -218,7 +332,7 @@ export async function capturarProyecto(project, cfg = config, opciones = {}) {
           }
         }
 
-        for (const route of project.routes) {
+        for (const route of rutas) {
           const base = slug(route.path) || slug(route.label) || "pagina";
           const archivo = `${base}--${viewport.name}.png`;
           const destino = path.join(rolDir, archivo);
