@@ -1,0 +1,18 @@
+# Dependencias
+node_modules/
+
+# Salida de capturas y galería generada
+output/
+
+# Config local que escribe el panel (proyectos, credenciales y ajustes propios)
+config.json
+
+# Notas y documentación de asistentes / herramientas (uso local)
+CLAUDE.md
+SKILL.md
+PROGRESO.md
+.claude/
+
+# Varios
+*.log
+.DS_Store
