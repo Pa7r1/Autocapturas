@@ -126,6 +126,31 @@ async function clickPrimero(page, selectores) {
   return false;
 }
 
+// Reproduce una secuencia de acciones sobre la página (click / esperar /
+// escribir / pausa) para llegar a una pantalla que solo se alcanza interactuando
+// (apps con estado tipo wizard). Se corre tras el goto y antes de la foto. Si un
+// paso falla, LANZA un error claro: la ruta queda ok:false con el detalle y el
+// resto de la corrida sigue (el try/catch por ruta lo contiene).
+async function ejecutarAcciones(page, acciones) {
+  for (let i = 0; i < acciones.length; i++) {
+    const a = acciones[i];
+    const ref = `paso ${i + 1} (${a.tipo}${a.sel ? ` "${a.sel}"` : ""})`;
+    try {
+      if (a.tipo === "click") {
+        await page.locator(a.sel).first().click({ timeout: 8000 });
+      } else if (a.tipo === "esperar") {
+        await page.locator(a.sel).first().waitFor({ state: "visible", timeout: 8000 });
+      } else if (a.tipo === "escribir") {
+        await page.locator(a.sel).first().fill(a.valor ?? "", { timeout: 8000 });
+      } else if (a.tipo === "pausa") {
+        await page.waitForTimeout(a.ms);
+      }
+    } catch (e) {
+      throw new Error(`${ref}: ${e.message.split("\n")[0]}`);
+    }
+  }
+}
+
 // Deja la página lista para una captura fiel de páginas largas: espera fuentes,
 // hace auto-scroll (dispara lazy-load y animaciones al scroll) y vuelve al tope.
 // Sin esto, fullPage sale cortado o en blanco.
@@ -333,7 +358,10 @@ export async function capturarProyecto(project, cfg = config, opciones = {}) {
         }
 
         for (const route of rutas) {
-          const base = slug(route.path) || slug(route.label) || "pagina";
+          // Preferimos la etiqueta para el nombre del archivo: varias rutas
+          // pueden compartir el mismo path (un wizard con distintas acciones
+          // sobre "/") y slug("/") siempre da "x", lo que las haría colisionar.
+          const base = slug(route.label) || slug(route.path) || "pagina";
           const archivo = `${base}--${viewport.name}.png`;
           const destino = path.join(rolDir, archivo);
           const url = new URL(route.path, project.baseUrl).href;
@@ -342,6 +370,11 @@ export async function capturarProyecto(project, cfg = config, opciones = {}) {
 
           try {
             await page.goto(url, { waitUntil: "load", timeout: 30000 });
+            // Acciones para llegar a la pantalla (apps con estado tipo wizard):
+            // se reproducen desde la URL base antes de la foto.
+            if (route.acciones && route.acciones.length) {
+              await ejecutarAcciones(page, route.acciones);
+            }
             // Preparar la página: fuentes + auto-scroll (lazy-load) + settle.
             // (A propósito NO usamos networkidle: con hot-reload nunca se calma).
             await prepararPagina(page, cfg);

@@ -198,6 +198,22 @@ function validarConfig(data) {
     for (const r of p.routes) {
       if (!r || typeof r.path !== "string" || !r.path.trim())
         return `Hay una ruta sin "path" en "${p.name}".`;
+      if (r.acciones != null) {
+        if (!Array.isArray(r.acciones))
+          return `Las acciones de "${r.label || r.path}" (${p.name}) deben ser una lista.`;
+        for (const a of r.acciones) {
+          if (!a || typeof a.tipo !== "string")
+            return `Hay una acción sin tipo en "${r.label || r.path}" (${p.name}).`;
+          if (!["click", "esperar", "escribir", "pausa"].includes(a.tipo))
+            return `Acción desconocida "${a.tipo}" en "${r.label || r.path}" (${p.name}).`;
+          if (["click", "esperar", "escribir"].includes(a.tipo) && (typeof a.sel !== "string" || !a.sel.trim()))
+            return `La acción "${a.tipo}" en "${r.label || r.path}" (${p.name}) necesita un selector.`;
+          if (a.tipo === "escribir" && typeof a.valor !== "string")
+            return `La acción "escribir" en "${r.label || r.path}" (${p.name}) necesita un valor.`;
+          if (a.tipo === "pausa" && (!Number.isFinite(a.ms) || a.ms <= 0))
+            return `La acción "pausa" en "${r.label || r.path}" (${p.name}) necesita ms > 0.`;
+        }
+      }
     }
     if (p.login != null) {
       if (typeof p.login !== "object" || typeof p.login.url !== "string" || !p.login.url.trim())
@@ -223,7 +239,12 @@ function limpiarProyecto(p) {
     secciones: !!p.secciones,
     routes: (p.routes || [])
       .filter((r) => r && typeof r.path === "string" && r.path.trim())
-      .map((r) => ({ path: String(r.path).trim(), label: String(r.label || r.path).trim() })),
+      .map((r) => {
+        const ruta = { path: String(r.path).trim(), label: String(r.label || r.path).trim() };
+        const acciones = limpiarAcciones(r.acciones);
+        if (acciones.length) ruta.acciones = acciones;
+        return ruta;
+      }),
     login: null,
   };
   if (p.login && typeof p.login === "object" && p.login.url) {
@@ -238,6 +259,27 @@ function limpiarProyecto(p) {
     proy.login = l;
   }
   return proy;
+}
+
+// Normaliza la lista de acciones de una ruta a su forma canónica, descartando
+// las inválidas. Tipos: click/esperar/escribir (con sel) y pausa (con ms).
+function limpiarAcciones(acciones) {
+  if (!Array.isArray(acciones)) return [];
+  const out = [];
+  for (const a of acciones) {
+    if (!a || typeof a.tipo !== "string") continue;
+    const tipo = a.tipo;
+    const sel = typeof a.sel === "string" ? a.sel.trim() : "";
+    if (tipo === "click" || tipo === "esperar") {
+      if (sel) out.push({ tipo, sel });
+    } else if (tipo === "escribir") {
+      if (sel) out.push({ tipo, sel, valor: typeof a.valor === "string" ? a.valor : "" });
+    } else if (tipo === "pausa") {
+      const ms = Math.round(a.ms);
+      if (Number.isFinite(ms) && ms > 0) out.push({ tipo, ms });
+    }
+  }
+  return out;
 }
 
 async function apiPostConfig(req, res) {
@@ -587,18 +629,27 @@ async function apiDescubrir(req, res) {
     return enviar(res, 404, JSON_TIPO, JSON.stringify({ ok: false, error: "Proyecto no encontrado" }));
   }
   const roles = Array.isArray(body.roles) ? body.roles : [];
-  const cred = roles.find((r) => r && r.usuario && r.clave);
+  // Credenciales: las que manda el panel o, si no, las guardadas en el proyecto.
+  const cred = roles.find((r) => r && r.usuario && r.clave) ||
+    (proj.login && proj.login.usuario && proj.login.clave
+      ? { etiqueta: "principal", usuario: proj.login.usuario, clave: proj.login.clave }
+      : null);
 
   const browser = await chromium.launch();
   try {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
-    // Si el proyecto tiene login y nos pasaron credenciales, entramos primero
-    // (así el crawl descubre también lo privado). Si falla, seguimos público.
+    // Si el proyecto tiene login y hay credenciales, entramos primero (así el
+    // crawl descubre también lo privado) y arrancamos el crawl desde donde quedó
+    // tras loguear (el home privado), no desde el baseUrl público. Si falla,
+    // seguimos público.
+    let base = proj.baseUrl;
     if (proj.login && cred) {
-      try { await iniciarSesion(page, proj.login, cred, proj.baseUrl); } catch { /* sigue público */ }
+      try { await iniciarSesion(page, proj.login, cred, proj.baseUrl); base = page.url() || base; }
+      catch { /* sigue público */ }
     }
-    const rutas = await descubrirRutas(page, proj.baseUrl, {});
+    const seeds = (proj.routes || []).map((r) => r.path);
+    const rutas = await descubrirRutas(page, base, { seeds });
     console.log(`  ✓ Descubiertas ${rutas.length} rutas en ${proj.name}`);
     enviar(res, 200, JSON_TIPO, JSON.stringify({ ok: true, rutas }));
   } catch (e) {

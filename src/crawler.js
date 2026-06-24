@@ -111,7 +111,16 @@ export async function descubrirRutas(page, baseUrl, opciones = {}) {
     }
   }
 
-  return [...rutas.entries()].map(([path, label]) => ({ path, label }));
+  // Si varios paths comparten la misma etiqueta (ej. un <title> genérico igual en
+  // todo el sitio, típico en SPAs), esa etiqueta no distingue nada: la cambiamos
+  // por la derivada del path (Turnos, Clientes, …). Los títulos únicos se respetan.
+  const entradas = [...rutas.entries()];
+  const conteo = new Map();
+  for (const [, label] of entradas) conteo.set(label, (conteo.get(label) || 0) + 1);
+  return entradas.map(([path, label]) => ({
+    path,
+    label: conteo.get(label) > 1 ? etiquetaDesdePath(path) : label,
+  }));
 }
 
 // Detecta secciones dentro de la página ya cargada. Devuelve [{ id, label }].
