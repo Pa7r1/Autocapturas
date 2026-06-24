@@ -96,10 +96,14 @@
     boton.textContent = "Buscando…";
     caja.hidden = false;
     caja.innerHTML = "Analizando el sitio y buscando rutas…";
+    // Mandamos las credenciales del proyecto (las tipeadas en el card; si no hay,
+    // el server usa las guardadas en config). Así el crawl entra al sitio y
+    // descubre también las secciones privadas, no solo lo público.
+    var form = proy.querySelector(".creds");
     fetch("/api/descubrir", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug: proy.dataset.slug, roles: [] }),
+      body: JSON.stringify({ slug: proy.dataset.slug, roles: form ? rolesDe(form) : [] }),
     })
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -334,6 +338,39 @@
     return l;
   }
 
+  // Acciones de una ruta ↔ texto (una por línea). Formato:
+  //   click <selector> | esperar <selector> | escribir <selector> | <valor> | pausa <ms>
+  // Líneas vacías o que empiezan con # se ignoran.
+  function accionesATexto(acciones) {
+    return (acciones || []).map(function (a) {
+      if (a.tipo === "escribir") return "escribir " + a.sel + " | " + (a.valor || "");
+      if (a.tipo === "pausa") return "pausa " + a.ms;
+      return a.tipo + " " + (a.sel || "");
+    }).join("\n");
+  }
+  function textoAAcciones(texto) {
+    var out = [];
+    (texto || "").split("\n").forEach(function (linea) {
+      var l = linea.trim();
+      if (!l || l[0] === "#") return;
+      var esp = l.indexOf(" ");
+      var tipo = (esp === -1 ? l : l.slice(0, esp)).toLowerCase();
+      var resto = esp === -1 ? "" : l.slice(esp + 1).trim();
+      if (tipo === "click" || tipo === "esperar") {
+        if (resto) out.push({ tipo: tipo, sel: resto });
+      } else if (tipo === "escribir") {
+        var bar = resto.indexOf("|");
+        var sel = (bar === -1 ? resto : resto.slice(0, bar)).trim();
+        var valor = bar === -1 ? "" : resto.slice(bar + 1).trim();
+        if (sel) out.push({ tipo: "escribir", sel: sel, valor: valor });
+      } else if (tipo === "pausa") {
+        var ms = parseInt(resto, 10);
+        if (ms > 0) out.push({ tipo: "pausa", ms: ms });
+      }
+    });
+    return out;
+  }
+
   function construir() {
     editor.innerHTML = "";
     var cab = el("div", "editorCab", "<h2>Configuración</h2>");
@@ -454,11 +491,28 @@
 
   function filaRuta(r) {
     var row = el("div", "ruta");
-    row.appendChild(input("rPath", r.path, "/ruta"));
-    row.appendChild(input("rLabel", r.label, "Etiqueta (ej. Inicio)"));
+    var fila = el("div", "rutaFila");
+    fila.appendChild(input("rPath", r.path, "/ruta"));
+    fila.appendChild(input("rLabel", r.label, "Etiqueta (ej. Inicio)"));
     var q = el("button", "quitarRuta", "✕");
     q.addEventListener("click", function () { row.remove(); });
-    row.appendChild(q);
+    fila.appendChild(q);
+    row.appendChild(fila);
+
+    // Pasos opcionales para llegar a una pantalla que se alcanza interactuando
+    // (apps con estado tipo wizard). Una acción por línea.
+    var det = el("details", "rutaPasos");
+    if (r.acciones && r.acciones.length) det.open = true;
+    var sum = document.createElement("summary");
+    sum.textContent = "Pasos para llegar a esta pantalla (opcional)";
+    det.appendChild(sum);
+    var ta = document.createElement("textarea");
+    ta.className = "rAcciones";
+    ta.rows = 3;
+    ta.placeholder = "click button.siguiente\nesperar .paso-2\nescribir #email | hola@test.com\npausa 500";
+    ta.value = accionesATexto(r.acciones);
+    det.appendChild(ta);
+    row.appendChild(det);
     return row;
   }
 
@@ -480,7 +534,12 @@
       card.querySelectorAll(".listaRutas .ruta").forEach(function (r) {
         var ruta = r.querySelector(".rPath").value.trim();
         var label = r.querySelector(".rLabel").value.trim();
-        if (ruta) routes.push({ path: ruta, label: label || ruta });
+        if (!ruta) return;
+        var obj = { path: ruta, label: label || ruta };
+        var ta = r.querySelector(".rAcciones");
+        var acciones = ta ? textoAAcciones(ta.value) : [];
+        if (acciones.length) obj.acciones = acciones;
+        routes.push(obj);
       });
       var login = null;
       if (card.querySelector(".pTieneLogin").checked) {

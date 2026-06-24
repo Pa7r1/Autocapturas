@@ -116,7 +116,11 @@
   .loginCampos details summary { cursor:pointer; color:var(--tenue); font-size:12px; margin-top:4px; }
   .loginCampos details > label { display:flex; flex-direction:column; gap:4px; margin-top:8px; }
   .rutaHead { font-size:12px; color:var(--tenue); margin:12px 0 6px; }
-  .ruta { display:grid; grid-template-columns:1fr 1fr auto; gap:8px; margin-bottom:8px; }
+  .ruta { margin-bottom:8px; }
+  .rutaFila { display:grid; grid-template-columns:1fr 1fr auto; gap:8px; }
+  .rutaPasos { margin-top:4px; }
+  .rutaPasos summary { cursor:pointer; color:var(--tenue); font-size:12px; }
+  .rAcciones { width:100%; margin-top:6px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
   .vp { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; margin-bottom:8px; }
   .quitarRuta, .quitarVp { padding:6px 10px; }
   .ajusteFila { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
