@@ -59,7 +59,19 @@ const PORDEFECTO = {
       login: null,
 
       // Pantallas a capturar. `path` se pega a baseUrl; `label` es el nombre
-      // que se muestra en la galería.
+      // que se muestra en la galería (y define el nombre del archivo).
+      //
+      // `acciones` (opcional) sirve para apps con estado tipo wizard, donde una
+      // pantalla solo se alcanza interactuando (no por URL). Se reproducen desde
+      // baseUrl antes de la foto. Tipos: click/esperar/escribir (con `sel`) y
+      // pausa (con `ms`). Para un wizard, una ruta por paso. Ejemplo:
+      // {
+      //   path: "/", label: "Paso 2",
+      //   acciones: [
+      //     { tipo: "click", sel: "button.siguiente" },
+      //     { tipo: "esperar", sel: ".paso-2" },
+      //   ],
+      // },
       routes: [
         { path: "/", label: "Inicio" },
         { path: "/about", label: "Acerca de" },
